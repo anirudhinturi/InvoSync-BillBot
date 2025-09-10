@@ -1,0 +1,436 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smart Invoice - Intelligent OCR Software</title>
+    <!-- Tailwind CSS for styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- pdf.js for reading PDFs -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.11.338/pdf.min.js"></script>
+    <!-- Tesseract.js for OCR -->
+    <script src='https://cdn.jsdelivr.net/npm/tesseract.js@2.1.5/dist/tesseract.min.js'></script>
+    <!-- SheetJS (js-xlsx) for Excel exporting -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.17.5/xlsx.full.min.js"></script>
+    <!-- Custom Google Font: Inter -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f8fafc; /* A very light gray (slate-50) */
+        }
+        .drop-zone {
+            border: 2px dashed #cbd5e1; /* slate-300 */
+            transition: all 0.3s ease;
+        }
+        .drop-zone.dragover {
+            border-color: #2563eb; /* blue-600 */
+            background-color: #eff6ff; /* blue-50 */
+        }
+        .table-container {
+             overflow-x: auto;
+        }
+        /* Custom scrollbar for a cleaner look */
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: #f1f1f1; }
+        ::-webkit-scrollbar-thumb { background: #a8a8a8; border-radius: 10px; }
+        ::-webkit-scrollbar-thumb:hover { background: #888; }
+        .hero-gradient {
+             background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+        }
+        .btn-primary {
+             @apply px-6 py-3 bg-blue-600 text-white font-bold rounded-lg shadow-lg hover:bg-blue-700 transition-all duration-300 transform hover:scale-105;
+        }
+    </style>
+</head>
+<body class="antialiased text-slate-800">
+
+    <div class="container mx-auto p-4 md:p-6">
+        <!-- Header -->
+        <header class="flex items-center justify-between mb-8">
+             <div class="flex items-center space-x-3">
+                <img src="C:\Users\aniru\Downloads\log.png" alt="Smart Invoice Logo" class="h-12 w-12">
+                <h1 class="text-3xl font-extrabold text-slate-800">Smart Invoice</h1>
+            </div>
+             <div class="flex items-center space-x-4">
+                 <button id="clear-data-btn" class="px-5 py-2 bg-slate-200 text-slate-700 font-semibold rounded-lg hover:bg-slate-300 transition">Clear All</button>
+                 <button id="export-excel-btn" class="px-5 py-2 bg-green-600 text-white font-semibold rounded-lg shadow-md hover:bg-green-700 transition">Export to Excel</button>
+             </div>
+        </header>
+
+        <!-- Main Content -->
+        <main class="space-y-10">
+
+            <!-- Upload Section -->
+            <section id="upload-section" class="bg-white rounded-xl shadow-lg p-6 md:p-8">
+                <div class="text-center">
+                    <h2 class="text-3xl font-bold">Upload, Extract, and Export</h2>
+                    <p class="text-lg text-slate-500 mt-2 max-w-2xl mx-auto">Simply drag and drop your PDF invoices below. Our intelligent engine will automatically extract the key information and make it ready for you to preview and export.</p>
+                </div>
+
+                <div id="drop-zone" class="drop-zone rounded-lg p-10 text-center cursor-pointer mt-8 max-w-4xl mx-auto">
+                    <div class="flex flex-col items-center justify-center">
+                        <svg class="w-16 h-16 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path></svg>
+                        <p class="mt-4 text-lg font-semibold text-slate-600">Drag & drop your PDF invoices here</p>
+                        <p class="mt-1 text-sm text-slate-500">or click to browse</p>
+                    </div>
+                    <input type="file" id="file-input" class="hidden" multiple accept=".pdf">
+                </div>
+
+                <div id="status-area" class="mt-6 text-center max-w-xl mx-auto">
+                    <div id="progress-container" class="w-full bg-slate-200 rounded-full h-2.5 hidden">
+                        <div id="progress-bar" class="bg-blue-600 h-2.5 rounded-full transition-all duration-500" style="width: 0%"></div>
+                    </div>
+                    <p id="status-text" class="mt-2 text-sm text-slate-600">Ready to process invoices.</p>
+                </div>
+            </section>
+            
+            <!-- Results Section (Initially Hidden) -->
+            <section id="results-section" class="hidden">
+                 <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                    <!-- Data Tables Column -->
+                    <div class="space-y-8">
+                        <div>
+                            <h2 class="text-2xl font-bold mb-4">Invoice Summary</h2>
+                            <div class="table-container border rounded-lg overflow-hidden bg-white">
+                                <table class="min-w-full divide-y divide-slate-200">
+                                    <thead class="bg-slate-50">
+                                        <tr>
+                                            <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Invoice #</th>
+                                            <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Date</th>
+                                            <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Buyer</th>
+                                            <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Items</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="summary-table-body" class="bg-white divide-y divide-slate-200">
+                                        <!-- Rows will be inserted here -->
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                        <div>
+                            <h2 class="text-2xl font-bold mb-4">Service Details</h2>
+                            <div class="table-container border rounded-lg overflow-hidden bg-white">
+                                <table class="min-w-full divide-y divide-slate-200">
+                                    <thead class="bg-slate-50">
+                                        <tr>
+                                            <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">S.No</th>
+                                            <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Description</th>
+                                            <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Qty</th>
+                                            <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Rate</th>
+                                            <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Amount</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="services-table-body" class="bg-white divide-y divide-slate-200">
+                                        <!-- Rows will be inserted here -->
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                    <!-- PDF Preview Column -->
+                    <div>
+                        <h2 class="text-2xl font-bold mb-4">Document Preview</h2>
+                        <div id="preview-container" class="border rounded-lg bg-slate-100 h-full min-h-[600px] flex items-center justify-center p-4">
+                            <p id="preview-placeholder" class="text-slate-500">Select an invoice from the summary table to preview it here.</p>
+                            <canvas id="pdf-canvas" class="hidden rounded-md shadow-md max-w-full"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <script>
+    document.addEventListener('DOMContentLoaded', () => {
+        // --- DOM ELEMENT REFERENCES ---
+        const dropZone = document.getElementById('drop-zone');
+        const fileInput = document.getElementById('file-input');
+        const statusText = document.getElementById('status-text');
+        const progressContainer = document.getElementById('progress-container');
+        const progressBar = document.getElementById('progress-bar');
+        const summaryTableBody = document.getElementById('summary-table-body');
+        const servicesTableBody = document.getElementById('services-table-body');
+        const pdfCanvas = document.getElementById('pdf-canvas');
+        const previewPlaceholder = document.getElementById('preview-placeholder');
+        const clearDataBtn = document.getElementById('clear-data-btn');
+        const exportExcelBtn = document.getElementById('export-excel-btn');
+        const uploadSection = document.getElementById('upload-section');
+        const resultsSection = document.getElementById('results-section');
+
+        // --- APPLICATION STATE ---
+        let invoices = [];
+        let services = [];
+
+        // --- FINAL, ADAPTED HEURISTIC PARSER ---
+        class HeuristicParser {
+            constructor() {
+                this.patterns = {
+                    invoice_no: [/Invoice\s*No\.?\s*:\s*([A-Z0-9\/-]+)/i, /Invoice\s*No\s+([A-Z0-9\/-]+)/i, /INVOICE\s*NO\s+(\d+)/i],
+                    invoice_date: [/Dated\s+(\d{2}-[A-Za-z]{3}-\d{2})/i, /Invoice\s*Date\s*:\s*(\d{2}\.\d{2}\.\d{4})/i, /Invoice\s*Date\s*:\s*(\d{2}\/\d{2}\/\d{4})/i, /DATE\s+(\d{2}-[A-Za-z]{3}-\d{2})/i, /Ack\s*Date\s*:\s*(\d{2}-[A-Za-z]{3}-\d{2})/i],
+                    buyer: [/Buyer\s*\(Bill to\)\s*\n\s*(Bharat\s*Electronics\s*Ltd)/i, /Details\s*of\s*Receiver\s*\(Billed\s*To\)\s*\n\s*(BHARAT\s*ELECTRONICS\s*LTD)/i, /BILL\s*TO\s*\n\s*(MAS,\s*BHARAT\s*ELECTRONICS\s*LIMITED)/i, /Details\s*of\s*Customer\s*\(Bill\s*To\)\s*Name\s*(BHARAT\s*ELECTRONICS\s*LIMITED)/i, /Bill\s*To\s*[:\-]?\s*\n\s*(.*?)\n/i],
+                    gstin: [/GSTIN\/UIN\s*:\s*(36AAACB5985C1ZQ)/i, /GST\s*NO:\s*(36AAACB5985C1Z[Q0])/i, /GSTIN\/Unique\s*ID\.\s*(36AAACB5985C1ZQ)/i, /GST\s*No\.\s*:\s*(36AAACB5985C1ZQ)/i, /GSTIN\s*[\/UIN]?\s*[:\-]?\s*([A-Z0-9]{15})/i]
+                };
+                this.table_start_keywords = ['description of services', 'description of goods', 'desemption at good services', 'description hsn', 'sund hsn code'];
+                this.table_end_keywords = ['total', 'amount chargeable', 'terms & conditions', 'for dynamic technologies', 'for acs technologies', 'rupees', 'declaration', 'company\'s bank'];
+            }
+
+            _extractField(text, key) {
+                for (const pattern of this.patterns[key]) {
+                    const match = text.match(pattern);
+                    if (match && match[1]) return match[1].trim().replace(/\n/g, ' ');
+                }
+                return '';
+            }
+
+            parse(text) {
+                const headerData = {
+                    invoice_no: this._extractField(text, 'invoice_no'),
+                    invoice_date: this._extractField(text, 'invoice_date'),
+                    buyer: this._extractField(text, 'buyer') || "BHARAT ELECTRONICS LTD",
+                    gstin: this._extractField(text, 'gstin') || "36AAACB5985C1ZQ"
+                };
+                const servicesData = this._parseServices(text);
+                return { headerData, servicesData };
+            }
+
+            _parseServices(fullText) {
+                const lines = fullText.split('\n');
+                let foundServices = [];
+                let tableStarted = false;
+                let itemLines = [];
+                
+                const startRegex = new RegExp(this.table_start_keywords.join('|'), 'i');
+                const endRegex = new RegExp(this.table_end_keywords.join('|'), 'i');
+                const itemStartRegex = /^\s*\d+(\.\d+)?\s+/;
+
+                for (const line of lines) {
+                    const lowerLine = line.toLowerCase().trim();
+                    if (!tableStarted && startRegex.test(lowerLine)) {
+                        tableStarted = true;
+                        continue;
+                    }
+                    if (tableStarted && endRegex.test(lowerLine)) {
+                        if (itemLines.length > 0) {
+                             const itemData = this._extractItemDetails(itemLines.join(' '), foundServices.length + 1);
+                             if(itemData.amount) foundServices.push(itemData);
+                        }
+                        break;
+                    }
+                    if (tableStarted && line.trim()) {
+                        if (itemStartRegex.test(line)) {
+                            if (itemLines.length > 0) {
+                                const itemData = this._extractItemDetails(itemLines.join(' '), foundServices.length + 1);
+                                if(itemData.amount) foundServices.push(itemData);
+                            }
+                            itemLines = [line];
+                        } else {
+                            itemLines.push(line);
+                        }
+                    }
+                }
+                if (tableStarted && itemLines.length > 0) {
+                    const itemData = this._extractItemDetails(itemLines.join(' '), foundServices.length + 1);
+                    if(itemData.amount) foundServices.push(itemData);
+                }
+
+                return foundServices.map(item => [item.s_no, item.description, item.quantity, item.rate, item.amount]);
+            }
+            
+            _extractItemDetails(text, defaultSerial) {
+                const numbers = text.match(/(\d{1,3}(,\d{3})*(\.\d{2})?)/g) || [];
+                const cleanNumbers = numbers.map(n => parseFloat(n.replace(/,/g, ''))).filter(n => !isNaN(n) && n > 0);
+                let amount = "", rate = "", quantity = "1", description = text, s_no = defaultSerial.toString();
+
+                if (cleanNumbers.length > 0) amount = cleanNumbers.pop().toFixed(2);
+                if (cleanNumbers.length > 0) rate = cleanNumbers.pop().toFixed(2);
+                
+                const qtyMatch = description.match(/(\d+(\.\d+)?)\s*Nos/i);
+                if (qtyMatch) {
+                    quantity = qtyMatch[1];
+                    description = description.replace(qtyMatch[0], '');
+                }
+
+                const serialMatch = description.trim().match(/^(\d+)\s+/);
+                if (serialMatch) {
+                    s_no = serialMatch[1];
+                    description = description.trim().substring(serialMatch[0].length).trim();
+                }
+                
+                if(amount) description = description.replace(new RegExp(amount.replace('.', '\\.') + '\\s*$'), '');
+                if(rate) description = description.replace(new RegExp(rate.replace('.', '\\.')), '');
+                description = description.replace(/\s{2,}/g, ' ').trim();
+                
+                return { s_no, description, quantity, rate, amount };
+            }
+        }
+        const parser = new HeuristicParser();
+
+        // --- EVENT LISTENERS & CORE FUNCTIONS ---
+        dropZone.addEventListener('click', () => fileInput.click());
+        fileInput.addEventListener('change', (e) => handleFiles(e.target.files));
+        dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('dragover'); });
+        dropZone.addEventListener('dragleave', (e) => { e.preventDefault(); dropZone.classList.remove('dragover'); });
+        dropZone.addEventListener('drop', (e) => { e.preventDefault(); dropZone.classList.remove('dragover'); handleFiles(e.dataTransfer.files); });
+        clearDataBtn.addEventListener('click', () => clearAllData(true));
+        exportExcelBtn.addEventListener('click', exportToExcel);
+        
+        async function handleFiles(files) {
+            const pdfFiles = Array.from(files).filter(f => f.type === 'application/pdf');
+            if (pdfFiles.length === 0) { statusText.textContent = "Please select PDF files only."; return; }
+            clearAllData(false); 
+            resultsSection.classList.remove('hidden');
+            progressContainer.classList.remove('hidden');
+            progressBar.style.width = '0%';
+            let filesProcessed = 0;
+            for (const file of pdfFiles) {
+                statusText.textContent = `Processing: ${file.name}...`;
+                try { await processPdf(file); } 
+                catch (error) { console.error(`Failed to process ${file.name}:`, error); }
+                filesProcessed++;
+                progressBar.style.width = `${(filesProcessed / pdfFiles.length) * 100}%`;
+            }
+            statusText.textContent = `Processing complete. Processed ${pdfFiles.length} file(s).`;
+            renderTables();
+        }
+
+        async function processPdf(file) {
+            const arrayBuffer = await file.arrayBuffer();
+            pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.11.338/pdf.worker.min.js`;
+            const pdf = await pdfjsLib.getDocument(arrayBuffer).promise;
+            
+            let fullText = '';
+            for (let i = 1; i <= pdf.numPages; i++) {
+                const page = await pdf.getPage(i);
+                const textContent = await page.getTextContent();
+                fullText += textContent.items.map(item => item.str).join('\n') + '\n';
+            }
+            
+            let ocrFailed = false;
+            if (fullText.trim().length < 200) {
+                statusText.textContent = `Scanning image: ${file.name}... (This can take a moment)`;
+                const { data: { text, words } } = await Tesseract.recognize(file);
+                if (words.length < 20) ocrFailed = true;
+                else fullText = text;
+            }
+
+            const invoiceId = `inv_${Date.now()}_${Math.random()}`;
+            if (ocrFailed) {
+                 invoices.push({ id: invoiceId, file, lineItemsCount: 0, invoice_no: file.name, invoice_date: 'N/A', buyer: 'OCR Failed: Image not clear', gstin: 'N/A' });
+                return;
+            }
+
+            const { headerData, servicesData } = parser.parse(fullText);
+            invoices.push({ id: invoiceId, file: file, ...headerData, lineItemsCount: servicesData.length });
+            servicesData.forEach(service => services.push({ invoiceId, data: service }));
+        }
+
+        function renderTables() {
+            summaryTableBody.innerHTML = '';
+            if (invoices.length > 0) {
+                invoices.forEach(inv => {
+                    const row = document.createElement('tr');
+                    row.className = 'hover:bg-slate-50 cursor-pointer';
+                    row.dataset.invoiceId = inv.id;
+                    row.innerHTML = `
+                        <td class="px-6 py-4">${inv.invoice_no || 'N/A'}</td>
+                        <td class="px-6 py-4">${inv.invoice_date || 'N/A'}</td>
+                        <td class="px-6 py-4 truncate max-w-xs">${inv.buyer || 'N/A'}</td>
+                        <td class="px-6 py-4 text-center">${inv.lineItemsCount}</td>
+                    `;
+                    row.addEventListener('click', () => renderPreview(inv.id));
+                    summaryTableBody.appendChild(row);
+                });
+            }
+
+            servicesTableBody.innerHTML = '';
+            if (services.length > 0) {
+                services.forEach(srv => {
+                    const row = document.createElement('tr');
+                    row.innerHTML = `
+                        <td class="px-6 py-4">${srv.data[0]}</td>
+                        <td class="px-6 py-4 text-wrap max-w-sm truncate">${srv.data[1]}</td>
+                        <td class="px-6 py-4">${srv.data[2]}</td>
+                        <td class="px-6 py-4">${srv.data[3]}</td>
+                        <td class="px-6 py-4">${srv.data[4]}</td>
+                    `;
+                    servicesTableBody.appendChild(row);
+                });
+            }
+        }
+
+        async function renderPreview(invoiceId) {
+            const invoice = invoices.find(inv => inv.id === invoiceId);
+            if (!invoice) return;
+            
+            Array.from(summaryTableBody.children).forEach(row => {
+                row.classList.toggle('bg-blue-100', row.dataset.invoiceId === invoiceId);
+            });
+
+            if (invoice.buyer.startsWith('OCR Failed')) {
+                previewPlaceholder.textContent = "Cannot display preview: OCR failed for this document.";
+                previewPlaceholder.classList.remove('hidden');
+                pdfCanvas.classList.add('hidden');
+                return;
+            }
+
+            previewPlaceholder.classList.add('hidden');
+            pdfCanvas.classList.remove('hidden');
+
+            const arrayBuffer = await invoice.file.arrayBuffer();
+            const pdf = await pdfjsLib.getDocument(arrayBuffer).promise;
+            const page = await pdf.getPage(1);
+            
+            const containerWidth = previewPlaceholder.parentElement.clientWidth;
+            const viewport = page.getViewport({ scale: containerWidth / page.getViewport({scale: 1}).width });
+            
+            const canvasContext = pdfCanvas.getContext('2d');
+            pdfCanvas.height = viewport.height;
+            pdfCanvas.width = viewport.width;
+            await page.render({ canvasContext, viewport }).promise;
+        }
+        
+        function clearAllData(confirmPrompt = true) {
+            const doClear = confirmPrompt ? confirm("Are you sure you want to clear all processed data?") : true;
+            if (doClear) {
+                invoices = [];
+                services = [];
+                summaryTableBody.innerHTML = '';
+                servicesTableBody.innerHTML = '';
+                resultsSection.classList.add('hidden');
+                previewPlaceholder.textContent = "Select an invoice from the summary table to preview it here.";
+                previewPlaceholder.classList.remove('hidden');
+                pdfCanvas.classList.add('hidden');
+                statusText.textContent = "Data cleared. Ready to process new invoices.";
+                progressBar.style.width = '0%';
+                progressContainer.classList.add('hidden');
+            }
+        }
+        
+        function exportToExcel() {
+            if (invoices.length === 0) { alert("No data to export."); return; }
+            const summaryData = invoices.map(inv => ({
+                'Invoice #': inv.invoice_no, 'Date': inv.invoice_date, 'Buyer': inv.buyer,
+                'GSTIN': inv.gstin, 'Items': inv.lineItemsCount
+            }));
+            const servicesData = services.map(srv => {
+                const inv = invoices.find(i => i.id === srv.invoiceId);
+                return {
+                    'Invoice #': inv ? inv.invoice_no : 'N/A',
+                    'S.No': srv.data[0], 'Description': srv.data[1], 'Quantity': srv.data[2],
+                    'Rate': srv.data[3], 'Amount': srv.data[4]
+                }
+            });
+
+            const wb = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(summaryData), "Invoice Summary");
+            XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(servicesData), "Service Details");
+            XLSX.writeFile(wb, "Smart_Invoice_Export.xlsx");
+        }
+    });
+    </script>
+</body>
+</html>
+
