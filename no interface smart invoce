@@ -1,0 +1,234 @@
+import os
+import re
+import cv2
+import pytesseract
+import pandas as pd
+import numpy as np
+from pytesseract import Output
+from pdf2image import convert_from_path
+import sys
+import subprocess
+from datetime import datetime
+
+
+def find_value_nearby(ocr_df, label_keywords, max_words=3, max_distance=400):
+    """
+    Finds a value for a given list of keywords by looking for text
+    on the same visual line to the right, but within a limited distance.
+    """
+    try:
+        pattern = '|'.join(label_keywords)
+        keyword_df = ocr_df[ocr_df['text'].str.lower().str.contains(pattern, na=False, regex=True)]
+        if keyword_df.empty:
+            return None
+
+        keyword_row = keyword_df.iloc[0]
+        keyword_y = keyword_row['top'] + keyword_row['height'] / 2
+        keyword_x_end = keyword_row['left'] + keyword_row['width']
+
+        # Find words on the same line, to the right, and within a certain distance
+        line_df = ocr_df[abs(ocr_df['top'] + ocr_df['height'] / 2 - keyword_y) < 15]
+        value_df = line_df[
+            (line_df['left'] > keyword_x_end) & (line_df['left'] < keyword_x_end + max_distance)].sort_values('left')
+
+        if not value_df.empty:
+            # Return a limited number of words to avoid grabbing text from other columns
+            return ' '.join(value_df.head(max_words)['text']).replace(':', '').strip()
+    except Exception:
+        pass
+    return None
+
+
+def find_buyer(ocr_df, company_hints=['ltd', 'limited', 'electronics']):
+    """
+    Intelligently finds the Buyer by first locating a label like 'Buyer' or 'Bill to',
+    then searching the area below for a company name containing a hint.
+    """
+    try:
+        label_keywords = ['buyer', 'bill to']
+        pattern = '|'.join(label_keywords)
+        label_df = ocr_df[ocr_df['text'].str.lower().str.contains(pattern, na=False, regex=True)]
+        if label_df.empty:
+            return None
+
+        label_row = label_df.iloc[0]
+
+        # Define a search area below the label
+        search_top = label_row['top'] + label_row['height']
+        search_area_df = ocr_df[
+            (ocr_df['top'] > search_top) & (ocr_df['top'] < search_top + 100)]  # Search 100 pixels down
+
+        company_pattern = '|'.join(company_hints)
+        company_df = search_area_df[
+            search_area_df['text'].str.lower().str.contains(company_pattern, na=False, regex=True)]
+
+        if not company_df.empty:
+            company_row = company_df.iloc[0]
+            # Get the full line of text for the company name
+            company_line_num = company_row['line_num']
+            full_company_line_df = ocr_df[ocr_df['line_num'] == company_line_num]
+            return ' '.join(full_company_line_df['text'])
+    except Exception:
+        pass
+    return None
+
+
+def extract_table(ocr_df):
+    """
+    A more precise table extraction logic that maps words to columns based on the
+    exact horizontal position of the headers.
+    """
+    items = []
+    try:
+        # --- 1. Define Headers and Find Their Positions ---
+        header_map = {
+            'S.No': ['s.no'], 'Description of Services': ['description'],
+            'Quantity': ['quantity', 'qty'], 'Rate': ['rate'], 'Total Amount': ['amount']
+        }
+        all_header_keywords = [item for sublist in header_map.values() for item in sublist]
+        header_candidates = ocr_df[ocr_df['text'].str.lower().isin(all_header_keywords)]
+        if header_candidates.empty: return []
+
+        header_line_num = header_candidates['line_num'].mode()[0]
+        header_df = ocr_df[ocr_df['line_num'] == header_line_num]
+
+        # --- 2. Define Column Boundaries ---
+        column_boundaries = {}
+        sorted_headers = []
+        for col_name, keywords in header_map.items():
+            matches = header_df[header_df['text'].str.lower().str.contains('|'.join(keywords))]
+            if not matches.empty:
+                header_pos = matches.iloc[0]
+                column_boundaries[col_name] = {'start': header_pos['left']}
+                sorted_headers.append((header_pos['left'], col_name))
+
+        sorted_headers.sort()
+        for i in range(len(sorted_headers)):
+            _, current_col = sorted_headers[i]
+            if i + 1 < len(sorted_headers):
+                next_x, _ = sorted_headers[i + 1]
+                column_boundaries[current_col]['end'] = next_x - 5
+            else:
+                column_boundaries[current_col]['end'] = ocr_df['left'].max() + 100
+
+        # --- 3. Find Table Vertical Boundaries ---
+        footer_keywords = ['total', 'sub-total', 'subtotal']
+        footer_candidates = ocr_df[ocr_df['text'].str.lower().isin(footer_keywords)]
+
+        table_start_y = header_df['top'].mean()
+        table_end_y = footer_candidates.iloc[0]['top'] if not footer_candidates.empty else ocr_df['top'].max()
+
+        # --- 4. Parse Rows Based on Column Boundaries ---
+        table_content_df = ocr_df[(ocr_df['top'] > table_start_y) & (ocr_df['top'] < table_end_y)]
+
+        for line_num in sorted(table_content_df['line_num'].unique()):
+            line_df = table_content_df[table_content_df['line_num'] == line_num]
+            if line_df.empty or len(line_df) < 2: continue
+
+            row_data = {col: [] for col in header_map.keys()}
+            for _, word_data in line_df.iterrows():
+                word_x_center = word_data['left'] + word_data['width'] / 2
+                for col_name, bounds in column_boundaries.items():
+                    if 'start' in bounds and 'end' in bounds and bounds['start'] <= word_x_center < bounds['end']:
+                        row_data[col_name].append(word_data['text'])
+                        break
+
+            final_row = {col_name: ' '.join(words) for col_name, words in row_data.items()}
+            if final_row.get('Description of Services') or final_row.get('S.No'):
+                items.append(final_row)
+
+    except Exception as e:
+        print(f"Could not parse table details: {e}")
+    return items
+
+
+def process_and_extract(file_path):
+    """Main function to orchestrate the extraction and save to a formatted Excel file."""
+    try:
+        # --- File Handling and OCR ---
+        print(f"--- Processing file: {file_path} ---")
+        file_extension = os.path.splitext(file_path)[1].lower()
+        if file_extension == '.pdf':
+            poppler_path = r"C:\poppler-25.07.0\Library\bin"
+            images = convert_from_path(file_path, poppler_path=poppler_path, dpi=300)
+            img = np.array(images[0])
+            img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+        elif file_extension in ['.jpeg', '.jpg', '.png']:
+            img = cv2.imread(file_path)
+            if img is None: raise FileNotFoundError
+        else:
+            print(f"Unsupported file type: {file_extension}");
+            return
+
+        config = '--psm 6'
+        ocr_data = pytesseract.image_to_data(img, config=config, output_type=Output.DICT)
+        ocr_df = pd.DataFrame(ocr_data)
+        ocr_df.dropna(subset=['text'], inplace=True)
+        ocr_df = ocr_df[ocr_df['conf'].astype(float) > 40]
+        ocr_df['text'] = ocr_df['text'].str.strip()
+        ocr_df = ocr_df[ocr_df['text'] != '']
+        ocr_df.reset_index(drop=True, inplace=True)
+
+        # --- Extraction of Specific Fields ---
+        print("Extracting invoice details...")
+
+        invoice_no = find_value_nearby(ocr_df, ['invoice no'])
+        if not invoice_no:  # Fallback to pattern matching
+            invoice_pattern = r'\w+/\w+/\d+/\d+'
+            invoice_matches = ocr_df[ocr_df['text'].str.match(invoice_pattern, case=False)]
+            if not invoice_matches.empty:
+                invoice_no = invoice_matches.iloc[0]['text']
+
+        buyer = find_buyer(ocr_df)
+        invoice_date = find_value_nearby(ocr_df, ['invoice date', 'ack date', 'date'])
+        gstin = find_value_nearby(ocr_df, ['gstin/uin', 'gstin'])
+
+        print("Extracting line items...")
+        line_items = extract_table(ocr_df)
+
+        # --- Prepare DataFrames for Excel ---
+        summary_data = {
+            'Invoice No': [invoice_no or 'Not Found'],
+            'Invoice Date': [invoice_date or 'Not Found'],
+            'Buyer': [buyer or 'Not Found'],
+            'GSTIN': [gstin or 'Not Found'],
+            'Line Items Count': [len(line_items)]
+        }
+        summary_df = pd.DataFrame(summary_data)
+
+        details_df = pd.DataFrame()
+        if line_items:
+            details_df = pd.DataFrame(line_items,
+                                      columns=['S.No', 'Description of Services', 'Quantity', 'Rate', 'Total Amount'])
+
+        # --- Save to a single Excel file with two sheets ---
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_filename = f"Formatted_Invoice_Output_{timestamp}.xlsx"
+        print(f"Saving data to {output_filename}...")
+        with pd.ExcelWriter(output_filename, engine='openpyxl') as writer:
+            summary_df.to_excel(writer, sheet_name='Invoice Summary', index=False)
+            if not details_df.empty:
+                details_df.to_excel(writer, sheet_name='Service Details', index=False)
+
+        print(f"--- Successfully saved to {output_filename} ---")
+
+        # --- Automatically open the Excel file ---
+        print(f"Opening {output_filename}...")
+        try:
+            if sys.platform == "win32":
+                os.startfile(output_filename)
+            elif sys.platform == "darwin":
+                subprocess.call(["open", output_filename])
+            else:
+                subprocess.call(["xdg-open", output_filename])
+        except Exception as e:
+            print(f"Could not automatically open the file. Please open it manually. Error: {e}")
+
+    except Exception as e:
+        print(f"An error occurred: {e}")
+
+
+# --- Run the extraction ---
+file_to_process = 'invoice1.pdf'
+process_and_extract(file_to_process)
+
