@@ -1,0 +1,122 @@
+import torch
+from transformers import LayoutLMForTokenClassification, LayoutLMProcessor
+from PIL import Image, ImageDraw, ImageFont
+import numpy as np
+from pdf2image import convert_from_path
+import os
+
+def process_and_extract_with_ai(file_path, poppler_path=None):
+    """
+    Extracts structured data from an invoice using a pre-trained LayoutLM model
+    fine-tuned on invoices. This function performs the core AI inference.
+    """
+    try:
+        # --- 1. Load the pre-trained model and processor for invoices ---
+        print("Loading pre-trained LayoutLM for Invoices model...")
+        # This model is specifically fine-tuned for invoices
+        processor = LayoutLMProcessor.from_pretrained("impira/layoutlm-invoices")
+        model = LayoutLMForTokenClassification.from_pretrained("impira/layoutlm-invoices")
+        
+        # --- 2. Prepare the Image from PDF or image file ---
+        print("Preparing image for AI model...")
+        if file_path.lower().endswith('.pdf'):
+            if not poppler_path or not os.path.exists(poppler_path):
+                raise FileNotFoundError("Poppler path is not configured or is invalid. Please provide a valid path.")
+            # Convert PDF to image
+            images = convert_from_path(file_path, poppler_path=poppler_path, dpi=300)
+            image = images[0]
+        else:
+            image = Image.open(file_path)
+        
+        image = image.convert("RGB")
+
+        # --- 3. Process the Image and Predict Entities ---
+        print("Processing image and predicting entities...")
+        # The processor uses Tesseract OCR in the background to get words and boxes
+        encoding = processor(image, return_tensors="pt")
+        
+        with torch.no_grad():
+            outputs = model(**encoding)
+        
+        # --- 4. Get Predictions ---
+        predictions = outputs.logits.argmax(-1).squeeze().tolist()
+        token_boxes = encoding.bbox.squeeze().tolist()
+
+        return image, predictions, token_boxes, model.config.id2label
+
+    except Exception as e:
+        print(f"An error occurred during AI processing: {e}")
+        return None, [], [], {}
+
+def post_process_and_display(predictions, id2label):
+    """
+    Organizes the raw predictions into a readable summary.
+    A full implementation would stitch words together. This version summarizes findings.
+    """
+    structured_data = {}
+    for label_id in predictions:
+        label_name = id2label.get(label_id, 'O')
+        # We are interested in the base label (e.g., 'invoice_id' from 'B-invoice_id')
+        base_label = label_name.split('-')[-1]
+        if base_label != 'O':
+            structured_data[base_label] = structured_data.get(base_label, 0) + 1
+    
+    print("\n--- Extracted Data Summary ---")
+    print("The AI model identified the following types of information:")
+    for label, count in structured_data.items():
+        print(f"- Found {label} ({count} tokens)")
+
+def visualize_predictions(image, predictions, token_boxes, id2label):
+    """
+    Draws the predicted bounding boxes and labels on the image for visualization.
+    """
+    print("\nVisualizing predictions...")
+    draw = ImageDraw.Draw(image)
+    # Ensure a font file is available, e.g., arial.ttf, or adjust the path.
+    try:
+        font = ImageFont.truetype("arial.ttf", 15)
+    except IOError:
+        print("Arial font not found. Using default font.")
+        font = ImageFont.load_default()
+        
+    label2color = {
+        'invoice_id': 'blue', 'total_amount': 'red', 'vendor_name': 'green',
+        'invoice_date': 'orange', 'buyer_name': 'purple', 'item': 'brown'
+    }
+
+    for pred, box in zip(predictions, token_boxes):
+        label = id2label.get(pred, 'O')
+        base_label = label.split('-')[-1]
+        
+        if base_label != 'O':
+            # Draw the box and label
+            color = label2color.get(base_label, 'violet')
+            draw.rectangle(box, outline=color, width=2)
+            draw.text((box[0], box[1] - 15), base_label, fill=color, font=font)
+            
+    return image
+
+if __name__ == '__main__':
+    # --- Configuration ---
+    # IMPORTANT: Update this with the path to your Poppler 'bin' directory
+    POPPLER_BIN_PATH = r"C:\poppler-25.07.0\Library\bin"
+    # Select one of the invoice files you want to process
+    invoice_file = "invoice1.pdf" 
+
+    # --- Run the AI Extraction and Visualization ---
+    image, predictions, boxes, id2label = process_and_extract_with_ai(invoice_file, poppler_path=POPPLER_BIN_PATH)
+    
+    if image and predictions:
+        # Print a summary of what was found
+        post_process_and_display(predictions, id2label)
+        
+        # Visualize the results by drawing on the image
+        result_image = visualize_predictions(image, boxes, predictions, id2label)
+        
+        # Save and show the annotated image
+        output_filename = f"ai_annotated_{os.path.basename(invoice_file)}.png"
+        result_image.save(output_filename)
+        print(f"\nSaved annotated image to: {output_filename}")
+        
+        result_image.show()
+
