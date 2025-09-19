@@ -1,0 +1,489 @@
+import os
+import re
+import cv2
+import pytesseract
+import pandas as pd
+import numpy as np
+from pytesseract import Output
+from pdf2image import convert_from_path
+import sys
+import subprocess
+from datetime import datetime
+import tkinter as tk
+from tkinter import ttk, filedialog, messagebox
+import threading
+from pathlib import Path
+
+
+class InvoiceExtractorGUI:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Invoice Data Extractor Dashboard")
+        self.root.geometry("1000x700")
+        self.root.configure(bg='#f0f0f0')
+        
+        # Configure style
+        self.style = ttk.Style()
+        self.style.theme_use('clam')
+        
+        # Variables
+        self.selected_files = []
+        self.processing = False
+        self.processed_count = 0
+        self.total_files = 0
+        
+        self.setup_ui()
+        
+    def setup_ui(self):
+        # Main container
+        main_frame = tk.Frame(self.root, bg='#f0f0f0')
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
+        
+        # Title
+        title_label = tk.Label(main_frame, text="📄 Invoice Data Extractor Dashboard", 
+                             font=('Arial', 20, 'bold'), bg='#f0f0f0', fg='#2c3e50')
+        title_label.pack(pady=(0, 20))
+        
+        # Stats Frame
+        stats_frame = tk.Frame(main_frame, bg='#f0f0f0')
+        stats_frame.pack(fill=tk.X, pady=(0, 20))
+        
+        # Statistics Cards
+        self.create_stat_card(stats_frame, "Files Selected", "0", "#3498db", 0)
+        self.create_stat_card(stats_frame, "Files Processed", "0", "#27ae60", 1)
+        self.create_stat_card(stats_frame, "Success Rate", "0%", "#e74c3c", 2)
+        
+        # File Selection Frame
+        file_frame = tk.LabelFrame(main_frame, text="📁 File Selection", 
+                                 font=('Arial', 12, 'bold'), bg='#f0f0f0', fg='#2c3e50')
+        file_frame.pack(fill=tk.X, pady=(0, 20))
+        
+        # File selection buttons
+        button_frame = tk.Frame(file_frame, bg='#f0f0f0')
+        button_frame.pack(fill=tk.X, padx=10, pady=10)
+        
+        self.select_files_btn = tk.Button(button_frame, text="🗂️ Select Files", 
+                                        command=self.select_files, bg='#3498db', 
+                                        fg='white', font=('Arial', 10, 'bold'),
+                                        relief=tk.FLAT, padx=20, pady=5)
+        self.select_files_btn.pack(side=tk.LEFT, padx=(0, 10))
+        
+        self.clear_files_btn = tk.Button(button_frame, text="🗑️ Clear Files", 
+                                       command=self.clear_files, bg='#e74c3c', 
+                                       fg='white', font=('Arial', 10, 'bold'),
+                                       relief=tk.FLAT, padx=20, pady=5)
+        self.clear_files_btn.pack(side=tk.LEFT)
+        
+        # File list
+        list_frame = tk.Frame(file_frame, bg='#f0f0f0')
+        list_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
+        
+        # Scrollbar for file list
+        scrollbar = tk.Scrollbar(list_frame)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        self.file_listbox = tk.Listbox(list_frame, yscrollcommand=scrollbar.set,
+                                     font=('Arial', 10), bg='white', 
+                                     selectbackground='#3498db', height=6)
+        self.file_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.config(command=self.file_listbox.yview)
+        
+        # Processing Frame
+        process_frame = tk.LabelFrame(main_frame, text="⚙️ Processing", 
+                                    font=('Arial', 12, 'bold'), bg='#f0f0f0', fg='#2c3e50')
+        process_frame.pack(fill=tk.X, pady=(0, 20))
+        
+        # Progress bar
+        progress_frame = tk.Frame(process_frame, bg='#f0f0f0')
+        progress_frame.pack(fill=tk.X, padx=10, pady=10)
+        
+        tk.Label(progress_frame, text="Progress:", font=('Arial', 10), 
+                bg='#f0f0f0').pack(anchor=tk.W)
+        
+        self.progress = ttk.Progressbar(progress_frame, mode='determinate', length=400)
+        self.progress.pack(fill=tk.X, pady=(5, 0))
+        
+        self.progress_label = tk.Label(progress_frame, text="Ready to process files", 
+                                     font=('Arial', 9), bg='#f0f0f0', fg='#7f8c8d')
+        self.progress_label.pack(anchor=tk.W, pady=(5, 0))
+        
+        # Process button
+        self.process_btn = tk.Button(process_frame, text="🚀 Start Processing", 
+                                   command=self.start_processing, bg='#27ae60', 
+                                   fg='white', font=('Arial', 12, 'bold'),
+                                   relief=tk.FLAT, padx=30, pady=10)
+        self.process_btn.pack(pady=10)
+        
+        # Output Frame
+        output_frame = tk.LabelFrame(main_frame, text="📊 Processing Log", 
+                                   font=('Arial', 12, 'bold'), bg='#f0f0f0', fg='#2c3e50')
+        output_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # Text widget for output
+        text_frame = tk.Frame(output_frame, bg='#f0f0f0')
+        text_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        # Scrollbar for text
+        text_scrollbar = tk.Scrollbar(text_frame)
+        text_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        self.output_text = tk.Text(text_frame, yscrollcommand=text_scrollbar.set,
+                                 font=('Courier', 9), bg='#2c3e50', fg='#ecf0f1',
+                                 wrap=tk.WORD, height=12)
+        self.output_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        text_scrollbar.config(command=self.output_text.yview)
+        
+        # Clear log button
+        clear_log_btn = tk.Button(output_frame, text="🧹 Clear Log", 
+                                command=self.clear_log, bg='#95a5a6', 
+                                fg='white', font=('Arial', 9, 'bold'),
+                                relief=tk.FLAT, padx=15, pady=3)
+        clear_log_btn.pack(pady=(0, 10))
+        
+    def create_stat_card(self, parent, title, value, color, column):
+        card_frame = tk.Frame(parent, bg=color, relief=tk.RAISED, bd=2)
+        card_frame.grid(row=0, column=column, padx=10, pady=5, sticky='ew')
+        parent.grid_columnconfigure(column, weight=1)
+        
+        value_label = tk.Label(card_frame, text=value, font=('Arial', 18, 'bold'),
+                             bg=color, fg='white')
+        value_label.pack(pady=(10, 0))
+        
+        title_label = tk.Label(card_frame, text=title, font=('Arial', 10),
+                             bg=color, fg='white')
+        title_label.pack(pady=(0, 10))
+        
+        # Store references for updating
+        if column == 0:
+            self.files_selected_label = value_label
+        elif column == 1:
+            self.files_processed_label = value_label
+        elif column == 2:
+            self.success_rate_label = value_label
+            
+    def select_files(self):
+        file_types = [
+            ('All supported files', '*.pdf *.jpg *.jpeg *.png'),
+            ('PDF files', '*.pdf'),
+            ('Image files', '*.jpg *.jpeg *.png'),
+            ('All files', '*.*')
+        ]
+        
+        files = filedialog.askopenfilenames(
+            title="Select invoice files to process",
+            filetypes=file_types
+        )
+        
+        if files:
+            self.selected_files = list(files)
+            self.update_file_list()
+            self.update_stats()
+            self.log_message(f"✅ Selected {len(files)} files for processing")
+            
+    def clear_files(self):
+        self.selected_files = []
+        self.update_file_list()
+        self.update_stats()
+        self.log_message("🗑️ Cleared all selected files")
+        
+    def update_file_list(self):
+        self.file_listbox.delete(0, tk.END)
+        for file_path in self.selected_files:
+            filename = os.path.basename(file_path)
+            self.file_listbox.insert(tk.END, filename)
+            
+    def update_stats(self):
+        self.files_selected_label.config(text=str(len(self.selected_files)))
+        self.files_processed_label.config(text=str(self.processed_count))
+        
+        if self.total_files > 0:
+            success_rate = (self.processed_count / self.total_files) * 100
+            self.success_rate_label.config(text=f"{success_rate:.1f}%")
+        else:
+            self.success_rate_label.config(text="0%")
+            
+    def start_processing(self):
+        if not self.selected_files:
+            messagebox.showwarning("No Files", "Please select files to process first.")
+            return
+            
+        if self.processing:
+            messagebox.showinfo("Processing", "Processing is already in progress.")
+            return
+            
+        # Reset counters
+        self.processed_count = 0
+        self.total_files = len(self.selected_files)
+        self.update_stats()
+        
+        # Start processing in a separate thread
+        self.processing = True
+        self.process_btn.config(state=tk.DISABLED, text="Processing...")
+        self.progress.config(maximum=self.total_files, value=0)
+        
+        thread = threading.Thread(target=self.process_files)
+        thread.daemon = True
+        thread.start()
+        
+    def process_files(self):
+        try:
+            for i, file_path in enumerate(self.selected_files):
+                if not self.processing:  # Check if processing was cancelled
+                    break
+                    
+                self.root.after(0, lambda: self.progress_label.config(
+                    text=f"Processing: {os.path.basename(file_path)}"))
+                
+                # Process the file
+                success = self.process_single_file(file_path)
+                
+                if success:
+                    self.processed_count += 1
+                    
+                # Update progress
+                self.root.after(0, lambda: self.progress.config(value=i + 1))
+                self.root.after(0, self.update_stats)
+                
+        except Exception as e:
+            self.root.after(0, lambda: self.log_message(f"❌ Error during processing: {str(e)}"))
+        finally:
+            # Reset UI
+            self.processing = False
+            self.root.after(0, lambda: self.process_btn.config(state=tk.NORMAL, text="🚀 Start Processing"))
+            self.root.after(0, lambda: self.progress_label.config(text="Processing complete"))
+            self.root.after(0, lambda: messagebox.showinfo("Complete", 
+                f"Processing finished! Processed {self.processed_count}/{self.total_files} files."))
+            
+    def process_single_file(self, file_path):
+        try:
+            self.root.after(0, lambda: self.log_message(f"📄 Processing: {os.path.basename(file_path)}"))
+            
+            # Your existing extraction logic here
+            result = self.process_and_extract(file_path)
+            
+            if result:
+                self.root.after(0, lambda: self.log_message(f"✅ Successfully processed: {os.path.basename(file_path)}"))
+                return True
+            else:
+                self.root.after(0, lambda: self.log_message(f"⚠️ Failed to process: {os.path.basename(file_path)}"))
+                return False
+                
+        except Exception as e:
+            self.root.after(0, lambda: self.log_message(f"❌ Error processing {os.path.basename(file_path)}: {str(e)}"))
+            return False
+            
+    def log_message(self, message):
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        formatted_message = f"[{timestamp}] {message}\n"
+        self.output_text.insert(tk.END, formatted_message)
+        self.output_text.see(tk.END)
+        
+    def clear_log(self):
+        self.output_text.delete(1.0, tk.END)
+        
+    # Your existing extraction functions (slightly modified for GUI integration)
+    def find_value_nearby(self, ocr_df, label_keywords, max_words=3, max_distance=400):
+        """Finds a value for a given list of keywords by looking for text on the same visual line to the right."""
+        try:
+            pattern = '|'.join(label_keywords)
+            keyword_df = ocr_df[ocr_df['text'].str.lower().str.contains(pattern, na=False, regex=True)]
+            if keyword_df.empty:
+                return None
+
+            keyword_row = keyword_df.iloc[0]
+            keyword_y = keyword_row['top'] + keyword_row['height'] / 2
+            keyword_x_end = keyword_row['left'] + keyword_row['width']
+
+            line_df = ocr_df[abs(ocr_df['top'] + ocr_df['height'] / 2 - keyword_y) < 15]
+            value_df = line_df[
+                (line_df['left'] > keyword_x_end) & (line_df['left'] < keyword_x_end + max_distance)].sort_values('left')
+
+            if not value_df.empty:
+                return ' '.join(value_df.head(max_words)['text']).replace(':', '').strip()
+        except Exception:
+            pass
+        return None
+
+    def find_buyer(self, ocr_df, company_hints=['ltd', 'limited', 'electronics']):
+        """Intelligently finds the Buyer by locating a label then searching below for a company name."""
+        try:
+            label_keywords = ['buyer', 'bill to']
+            pattern = '|'.join(label_keywords)
+            label_df = ocr_df[ocr_df['text'].str.lower().str.contains(pattern, na=False, regex=True)]
+            if label_df.empty:
+                return None
+
+            label_row = label_df.iloc[0]
+            search_top = label_row['top'] + label_row['height']
+            search_area_df = ocr_df[(ocr_df['top'] > search_top) & (ocr_df['top'] < search_top + 100)]
+
+            company_pattern = '|'.join(company_hints)
+            company_df = search_area_df[
+                search_area_df['text'].str.lower().str.contains(company_pattern, na=False, regex=True)]
+
+            if not company_df.empty:
+                company_row = company_df.iloc[0]
+                company_line_num = company_row['line_num']
+                full_company_line_df = ocr_df[ocr_df['line_num'] == company_line_num]
+                return ' '.join(full_company_line_df['text'])
+        except Exception:
+            pass
+        return None
+
+    def extract_table(self, ocr_df):
+        """Extract table data based on column boundaries."""
+        items = []
+        try:
+            header_map = {
+                'S.No': ['s.no'], 'Description of Services': ['description'],
+                'Quantity': ['quantity', 'qty'], 'Rate': ['rate'], 'Total Amount': ['amount']
+            }
+            all_header_keywords = [item for sublist in header_map.values() for item in sublist]
+            header_candidates = ocr_df[ocr_df['text'].str.lower().isin(all_header_keywords)]
+            if header_candidates.empty: return []
+
+            header_line_num = header_candidates['line_num'].mode()[0]
+            header_df = ocr_df[ocr_df['line_num'] == header_line_num]
+
+            column_boundaries = {}
+            sorted_headers = []
+            for col_name, keywords in header_map.items():
+                matches = header_df[header_df['text'].str.lower().str.contains('|'.join(keywords))]
+                if not matches.empty:
+                    header_pos = matches.iloc[0]
+                    column_boundaries[col_name] = {'start': header_pos['left']}
+                    sorted_headers.append((header_pos['left'], col_name))
+
+            sorted_headers.sort()
+            for i in range(len(sorted_headers)):
+                _, current_col = sorted_headers[i]
+                if i + 1 < len(sorted_headers):
+                    next_x, _ = sorted_headers[i + 1]
+                    column_boundaries[current_col]['end'] = next_x - 5
+                else:
+                    column_boundaries[current_col]['end'] = ocr_df['left'].max() + 100
+
+            footer_keywords = ['total', 'sub-total', 'subtotal']
+            footer_candidates = ocr_df[ocr_df['text'].str.lower().isin(footer_keywords)]
+
+            table_start_y = header_df['top'].mean()
+            table_end_y = footer_candidates.iloc[0]['top'] if not footer_candidates.empty else ocr_df['top'].max()
+
+            table_content_df = ocr_df[(ocr_df['top'] > table_start_y) & (ocr_df['top'] < table_end_y)]
+
+            for line_num in sorted(table_content_df['line_num'].unique()):
+                line_df = table_content_df[table_content_df['line_num'] == line_num]
+                if line_df.empty or len(line_df) < 2: continue
+
+                row_data = {col: [] for col in header_map.keys()}
+                for _, word_data in line_df.iterrows():
+                    word_x_center = word_data['left'] + word_data['width'] / 2
+                    for col_name, bounds in column_boundaries.items():
+                        if 'start' in bounds and 'end' in bounds and bounds['start'] <= word_x_center < bounds['end']:
+                            row_data[col_name].append(word_data['text'])
+                            break
+
+                final_row = {col_name: ' '.join(words) for col_name, words in row_data.items()}
+                if final_row.get('Description of Services') or final_row.get('S.No'):
+                    items.append(final_row)
+
+        except Exception as e:
+            self.root.after(0, lambda: self.log_message(f"⚠️ Could not parse table details: {e}"))
+        return items
+
+    def process_and_extract(self, file_path):
+        """Main extraction function adapted for GUI."""
+        try:
+            self.root.after(0, lambda: self.log_message(f"🔍 Analyzing: {os.path.basename(file_path)}"))
+            
+            # File handling and OCR
+            file_extension = os.path.splitext(file_path)[1].lower()
+            if file_extension == '.pdf':
+                poppler_path = r"C:\poppler-25.07.0\Library\bin"  # Update this path as needed
+                images = convert_from_path(file_path, poppler_path=poppler_path, dpi=300)
+                img = np.array(images[0])
+                img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+            elif file_extension in ['.jpeg', '.jpg', '.png']:
+                img = cv2.imread(file_path)
+                if img is None: 
+                    raise FileNotFoundError(f"Could not read image file: {file_path}")
+            else:
+                self.root.after(0, lambda: self.log_message(f"❌ Unsupported file type: {file_extension}"))
+                return False
+
+            config = '--psm 6'
+            ocr_data = pytesseract.image_to_data(img, config=config, output_type=Output.DICT)
+            ocr_df = pd.DataFrame(ocr_data)
+            ocr_df.dropna(subset=['text'], inplace=True)
+            ocr_df = ocr_df[ocr_df['conf'].astype(float) > 40]
+            ocr_df['text'] = ocr_df['text'].str.strip()
+            ocr_df = ocr_df[ocr_df['text'] != '']
+            ocr_df.reset_index(drop=True, inplace=True)
+
+            # Extract fields
+            invoice_no = self.find_value_nearby(ocr_df, ['invoice no'])
+            if not invoice_no:
+                invoice_pattern = r'\w+/\w+/\d+/\d+'
+                invoice_matches = ocr_df[ocr_df['text'].str.match(invoice_pattern, case=False)]
+                if not invoice_matches.empty:
+                    invoice_no = invoice_matches.iloc[0]['text']
+
+            buyer = self.find_buyer(ocr_df)
+            invoice_date = self.find_value_nearby(ocr_df, ['invoice date', 'ack date', 'date'])
+            gstin = self.find_value_nearby(ocr_df, ['gstin/uin', 'gstin'])
+            line_items = self.extract_table(ocr_df)
+
+            # Prepare output data
+            summary_data = {
+                'Invoice No': [invoice_no or 'Not Found'],
+                'Invoice Date': [invoice_date or 'Not Found'],
+                'Buyer': [buyer or 'Not Found'],
+                'GSTIN': [gstin or 'Not Found'],
+                'Line Items Count': [len(line_items)]
+            }
+            summary_df = pd.DataFrame(summary_data)
+
+            details_df = pd.DataFrame()
+            if line_items:
+                details_df = pd.DataFrame(line_items,
+                                        columns=['S.No', 'Description of Services', 'Quantity', 'Rate', 'Total Amount'])
+
+            # Save to Excel
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            base_name = Path(file_path).stem
+            output_filename = f"Extracted_{base_name}_{timestamp}.xlsx"
+            
+            with pd.ExcelWriter(output_filename, engine='openpyxl') as writer:
+                summary_df.to_excel(writer, sheet_name='Invoice Summary', index=False)
+                if not details_df.empty:
+                    details_df.to_excel(writer, sheet_name='Service Details', index=False)
+
+            self.root.after(0, lambda: self.log_message(f"💾 Saved: {output_filename}"))
+            
+            # Try to open the file
+            try:
+                if sys.platform == "win32":
+                    os.startfile(output_filename)
+                elif sys.platform == "darwin":
+                    subprocess.call(["open", output_filename])
+                else:
+                    subprocess.call(["xdg-open", output_filename])
+                self.root.after(0, lambda: self.log_message(f"📂 Opened: {output_filename}"))
+            except Exception as e:
+                self.root.after(0, lambda: self.log_message(f"⚠️ Could not auto-open file: {e}"))
+
+            return True
+
+        except Exception as e:
+            self.root.after(0, lambda: self.log_message(f"❌ Error processing {os.path.basename(file_path)}: {str(e)}"))
+            return False
+
+
+def main():
+    root = tk.Tk()
+    app = InvoiceExtractorGUI(root)
+    root.mainloop()
+
+
+if __name__ == "__main__":
+    main()
